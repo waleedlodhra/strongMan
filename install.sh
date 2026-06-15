@@ -75,14 +75,23 @@ ok "System packages installed"
 # ── 3. clone / update ─────────────────────────────────────────────────────────
 step "Getting application code"
 if [[ -d "$APP_DIR/.git" ]]; then
-    info "Updating existing installation at $APP_DIR ..."
-    git -C "$APP_DIR" pull --ff-only
-    ok "Repository updated"
+    # Ensure the remote points to the correct repo (first install may have used old URL)
+    CURRENT_REMOTE=$(git -C "$APP_DIR" remote get-url origin 2>/dev/null || echo "")
+    if [[ "$CURRENT_REMOTE" != "$REPO_URL" ]]; then
+        info "Correcting remote URL: $CURRENT_REMOTE → $REPO_URL"
+        git -C "$APP_DIR" remote set-url origin "$REPO_URL"
+        git -C "$APP_DIR" fetch origin -q
+        git -C "$APP_DIR" reset --hard origin/master -q
+        ok "Repository switched and updated"
+    else
+        git -C "$APP_DIR" pull --ff-only -q
+        ok "Repository updated"
+    fi
 elif [[ -d "$APP_DIR" ]]; then
     die "$APP_DIR exists but is not a git repo. Remove it or set: STRONGMAN_DIR=/other/path"
 else
     info "Cloning to $APP_DIR ..."
-    git clone "$REPO_URL" "$APP_DIR"
+    git clone "$REPO_URL" "$APP_DIR" -q
     ok "Repository cloned"
 fi
 
