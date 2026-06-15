@@ -279,15 +279,19 @@ function fillInfos(conn_id, rows, child) {
 
         var csa_cell = document.createElement('td');
         csa_cell.className = 'child-sa-cell';
-        csa_cell.colSpan = '7';
-        csa_cell.style.cssText = 'padding-left:34px; background-color:#dadfe8;';
+        csa_cell.colSpan = 7;
+        csa_cell.style.cssText = 'padding: 0 0 0 20px; background-color:#eef1f7;';
+
+        // scrollable wrapper so wide columns don't squeeze the layout
+        var wrapper = document.createElement('div');
+        wrapper.className = 'child-sa-table-wrapper';
 
         var tbl = document.createElement('table');
-        tbl.className = 'table-hover table-condensed table-responsive child-sa-table';
-        tbl.style.width = '100%';
+        tbl.className = 'table-hover table-condensed child-sa-table';
 
         var thead = document.createElement('thead');
-        thead.innerHTML = '<tr><th>Name</th><th>State</th><th>Local TS</th><th>Remote TS</th>' +
+        thead.innerHTML = '<tr style="background:#d8dce8;">' +
+            '<th>Name</th><th>State</th><th>Local TS</th><th>Remote TS</th>' +
             '<th>Bytes In</th><th>Bytes Out</th><th>Pkts In</th><th>Pkts Out</th>' +
             '<th>Installed</th><th>Rekey in</th><th></th></tr>';
         tbl.appendChild(thead);
@@ -319,7 +323,8 @@ function fillInfos(conn_id, rows, child) {
             tbody.appendChild(cr);
         }
         tbl.appendChild(tbody);
-        csa_cell.appendChild(tbl);
+        wrapper.appendChild(tbl);
+        csa_cell.appendChild(wrapper);
         csa_row.appendChild(csa_cell);
         sas.appendChild(csa_row);
     }

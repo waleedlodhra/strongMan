@@ -1,48 +1,34 @@
-import time
 from datetime import timedelta
 from django.utils import timezone
-
 from django.http import JsonResponse
-
 from strongMan.apps.server_connections.models.specific import LogMessage
 
 
 class LogHandler(object):
+    """
+    Short-poll log endpoint. Returns immediately with whatever logs are
+    available — no blocking. The JS side polls every 5 seconds.
+    """
     def __init__(self, request):
-        self.newest_log = None
         self.id = int(request.POST.get('id'))
 
     def handle(self):
-        response = dict(logs=[])
         self._delete_old_logs()
         if self.id < 0:
-            logs = self._get_logs()
+            logs = LogMessage.objects.all().order_by('timestamp')
         else:
-            logs = self._get_new_logs()
+            logs = LogMessage.objects.filter(pk__gt=self.id).order_by('timestamp')
+
+        response = {'logs': []}
         for log in logs:
-            log_dict = dict(id=log.id, message=log.message, name=log.connection.profile)
-            log_dict['timestamp'] = log.timestamp.strftime("%Y-%m-%d %H:%M:%S")
-            response['logs'].append(log_dict)
+            response['logs'].append({
+                'id':        log.id,
+                'message':   log.message,
+                'name':      log.connection.profile,
+                'timestamp': log.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            })
         return JsonResponse(response)
 
     def _delete_old_logs(self):
-        time_threshold = timezone.now() - timedelta(minutes=5)
+        time_threshold = timezone.now() - timedelta(minutes=10)
         LogMessage.objects.filter(timestamp__lt=time_threshold).delete()
-
-    def _get_logs(self):
-        deadline = time.time() + 30
-        while LogMessage.objects.all().count() == 0:
-            if time.time() >= deadline:
-                return LogMessage.objects.none()
-            time.sleep(1)
-        return LogMessage.objects.all().order_by('timestamp')
-
-    def _get_new_logs(self):
-        deadline = time.time() + 30
-        logs = LogMessage.objects.filter(pk__gt=self.id).order_by('timestamp')
-        while logs.count() == 0:
-            if time.time() >= deadline:
-                return logs
-            time.sleep(1)
-            logs = LogMessage.objects.filter(pk__gt=self.id).order_by('timestamp')
-        return logs

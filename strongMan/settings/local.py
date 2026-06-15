@@ -2,6 +2,7 @@ from .base import *
 
 
 DEBUG = True
+ALLOWED_HOSTS = ['*']   # dev mode — production uses STRONGMAN_ALLOWED_HOSTS env var
 
 DATABASES = {
     'default': {

@@ -96,10 +96,26 @@
 #ConnectionForm .row, #ConnectionForm input, #ConnectionForm .identity_picker, #ConnectionForm .picker, #ConnectionForm .cert_upload, #ConnectionForm .certificateselect, #ConnectionForm .identityselect {
   margin-bottom: 10px; }
 
+/* Override the inline-block rule that was shrinking the SA detail panel */
+#connection-overview .table-container .connection-info-row .sa-scroll,
+#connection-overview .table-container .connection-info-row .connection-info,
+#connection-overview .table-container .connection-info-row .panel-body {
+  display: block !important;
+  width: 100% !important; }
+
 .sa-scroll {
-  max-height: 400px !important;
+  max-height: 500px;
   width: 100% !important;
-  overflow-y: scroll; }
+  overflow-x: auto;
+  overflow-y: auto; }
+
+/* Child SA sub-table scrolls horizontally if columns overflow */
+.child-sa-table-wrapper {
+  overflow-x: auto;
+  width: 100%; }
+
+.child-sa-table {
+  min-width: 800px; }
 
 #connection-overview .table-container .connection-info {
   margin-bottom: 0; }
