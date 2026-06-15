@@ -122,6 +122,18 @@ class CertificateAuthentication(Authentication):
         return OrderedDict(type=key.get_algorithm_type(), data=key.der_container)
 
 
+class PskAuthentication(Authentication):
+    psk = models.TextField(default='')
+    identity = models.TextField(blank=True, default='')
+
+    def dict(self):
+        auth = super(PskAuthentication, self).dict()
+        parameters = auth[self.name]
+        if self.identity:
+            parameters['id'] = self.identity
+        return auth
+
+
 class EapTlsAuthentication(Authentication):
     REMOTE_AUTH_CHOICES = (
         ('eap-tls', "eap-tls"),

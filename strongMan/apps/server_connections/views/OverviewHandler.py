@@ -3,6 +3,7 @@ from django.shortcuts import render
 from django_tables2 import RequestConfig
 
 from strongMan.apps.server_connections.models.connections import Connection
+from strongMan.apps.server_connections.sync import get_discovered_connections
 from strongMan.helper_apps.vici.wrapper.exception import ViciException
 from ..tables import ConnectionTable
 
@@ -24,4 +25,11 @@ class OverviewHandler(object):
         RequestConfig(self.request, paginate={"per_page": self.ENTRIES_PER_PAGE}).configure(table)
         if len(queryset) == 0:
             table = None
-        return render(self.request, 'server_connections/overview.html', {'table': table})
+
+        discovered, vici_error = get_discovered_connections()
+
+        return render(self.request, 'server_connections/overview.html', {
+            'table': table,
+            'discovered': discovered,
+            'vici_error': vici_error,
+        })

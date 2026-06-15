@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block html-head %}
+<style>
+.stat-card { text-align: center; padding: 12px 0; }
+.stat-card .stat-value { font-size: 2em; font-weight: bold; color: #337ab7; line-height: 1; }
+.stat-card .stat-label { font-size: 0.85em; color: #777; margin-top: 4px; }
+.child-row td { background: #f5f7fb; font-size: 0.9em; }
+#last-refresh { font-size: 0.8em; color: #aaa; }
+.encr-badge { font-size: 0.75em; color: #555; background: #eee;
+              border-radius: 3px; padding: 1px 5px; white-space: nowrap; }
+</style>
+{% endblock %}
+
+{% block title %}Monitor{% endblock %}
+{% block small-title %}Live strongSwan Status{% endblock %}
+
+{% block content %}
+<div class="row" style="margin-bottom: 8px;">
+    <div class="col-xs-12">
+        <span id="last-refresh">Loading…</span>
+        <button class="btn btn-default btn-xs pull-right" onclick="loadData()">
+            <i class="fa fa-refresh"></i> Refresh now
+        </button>
+    </div>
+</div>
+
+<!-- Daemon status cards -->
+<div class="row">
+    <div class="col-xs-12 col-sm-3">
+        <div class="panel panel-default">
+            <div class="panel-body stat-card">
+                <div class="stat-value" style="font-size:1.2em;" id="d-version">—</div>
+                <div class="stat-label">Daemon / Version</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-xs-6 col-sm-2">
+        <div class="panel panel-default">
+            <div class="panel-body stat-card">
+                <div class="stat-value text-success" id="d-ike-total">—</div>
+                <div class="stat-label">Active IKE SAs</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-xs-6 col-sm-2">
+        <div class="panel panel-default">
+            <div class="panel-body stat-card">
+                <div class="stat-value text-warning" id="d-halfopen">—</div>
+                <div class="stat-label">Half-open</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-xs-6 col-sm-2">
+        <div class="panel panel-default">
+            <div class="panel-body stat-card">
+                <div class="stat-value" id="d-workers">—</div>
+                <div class="stat-label">Workers idle / total</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-xs-6 col-sm-3">
+        <div class="panel panel-default">
+            <div class="panel-body stat-card">
+                <div class="stat-value text-muted" style="font-size:1em;" id="d-uptime">—</div>
+                <div class="stat-label">Uptime</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="error-banner" class="alert alert-danger" style="display:none;"></div>
+
+<!-- SA table -->
+<div class="panel panel-default">
+    <div class="panel-heading">
+        <strong><i class="fa fa-lock"></i> Active Security Associations</strong>
+    </div>
+    <div class="panel-body" style="padding:0; overflow-x:auto;">
+        <table class="table table-condensed table-hover" style="margin:0;">
+            <thead>
+                <tr>
+                    <th>Connection</th>
+                    <th>IKE</th>
+                    <th>State</th>
+                    <th>Local</th>
+                    <th>Remote</th>
+                    <th>Encryption</th>
+                    <th>Traffic</th>
+                    <th>Timers</th>
+                </tr>
+            </thead>
+            <tbody id="sa-tbody">
+                <tr><td colspan="8" class="text-center text-muted" style="padding:20px;">Loading…</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+var MONITOR_DATA_URL = '{% url "server_connections:monitor_data" %}';
+var CSRF_TOKEN = '{{ csrf_token }}';
+
+function fmt_bytes(n) {
+    n = parseInt(n, 10);
+    if (isNaN(n)) return '0 B';
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n/1024).toFixed(1) + ' KB';
+    if (n < 1073741824) return (n/1048576).toFixed(1) + ' MB';
+    return (n/1073741824).toFixed(2) + ' GB';
+}
+
+function fmt_sec(s) {
+    s = parseInt(s, 10);
+    if (isNaN(s) || s <= 0) return '—';
+    var h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
+    if (h > 0) return h+'h '+m+'m';
+    if (m > 0) return m+'m '+sec+'s';
+    return sec+'s';
+}
+
+function state_badge(st) {
+    var cls = 'default';
+    if (st === 'ESTABLISHED' || st === 'INSTALLED') cls = 'success';
+    else if (st === 'CONNECTING' || st === 'REKEYING') cls = 'warning';
+    else if (st === 'DELETING') cls = 'danger';
+    return '<span class="label label-'+cls+'">'+(st||'?')+'</span>';
+}
+
+function renderDaemon(d) {
+    if (!d || d.error) {
+        $('#d-version').text(d && d.error ? 'Error' : '—');
+        return;
+    }
+    $('#d-version').text((d.daemon||'') + ' ' + (d.version||''));
+    $('#d-ike-total').text(d.ike_total   || '0');
+    $('#d-halfopen').text(d.ike_halfopen || '0');
+    $('#d-workers').text((d.workers_idle||'—') + ' / ' + (d.workers_total||'—'));
+    $('#d-uptime').text(d.running || '—');
+}
+
+function renderSAs(sas) {
+    var tbody = document.getElementById('sa-tbody');
+    tbody.innerHTML = '';
+    if (!sas || sas.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted" style="padding:20px;">No active SAs</td></tr>';
+        return;
+    }
+    sas.forEach(function(ike) {
+        var tr = document.createElement('tr');
+        tr.style.backgroundColor = '#fafbff';
+        tr.innerHTML =
+            '<td><strong>'+ike.name+'</strong></td>'+
+            '<td>IKEv'+ike.version+'</td>'+
+            '<td>'+state_badge(ike.state)+'</td>'+
+            '<td><small>'+ike.local_host+'<br><span class="text-muted">'+ike.local_id+'</span></small></td>'+
+            '<td><small>'+ike.remote_host+'<br><span class="text-muted">'+ike.remote_id+'</span></small></td>'+
+            '<td><span class="encr-badge">'+(ike.encr||'—')+'</span>'+(ike.integ?'<br><small class="text-muted">'+ike.integ+'</small>':'')+'</td>'+
+            '<td>—</td>'+
+            '<td><small>up: '+fmt_sec(ike.established)+' ago<br>reauth: '+fmt_sec(ike.reauth_time)+'</small></td>';
+        tbody.appendChild(tr);
+
+        (ike.children||[]).forEach(function(cs) {
+            var cr = document.createElement('tr');
+            cr.className = 'child-row';
+            cr.innerHTML =
+                '<td style="padding-left:28px;"><i class="fa fa-arrow-right text-muted"></i> '+cs.name+'</td>'+
+                '<td><small>'+(cs.protocol||'ESP')+'</small></td>'+
+                '<td>'+state_badge(cs.state)+'</td>'+
+                '<td colspan="2"><small>'+
+                    (cs.local_ts||'—')+'<br>'+
+                    '<span class="text-muted">↔ '+(cs.remote_ts||'—')+'</span>'+
+                '</small></td>'+
+                '<td><span class="encr-badge">'+(cs.encr||'—')+'</span></td>'+
+                '<td><small>'+
+                    '↓ '+fmt_bytes(cs.bytes_in)+' ('+cs.packets_in+' pkts)<br>'+
+                    '↑ '+fmt_bytes(cs.bytes_out)+' ('+cs.packets_out+' pkts)'+
+                '</small></td>'+
+                '<td><small>'+
+                    'installed: '+fmt_sec(cs.install_time)+' ago<br>'+
+                    'rekey in: '+fmt_sec(cs.rekey_time)+
+                '</small></td>';
+            tbody.appendChild(cr);
+        });
+    });
+}
+
+function loadData() {
+    $.ajax({
+        url: MONITOR_DATA_URL, type: 'POST',
+        data: {csrfmiddlewaretoken: CSRF_TOKEN},
+        success: function(r) {
+            if (!r.success) { $('#error-banner').text('VICI error: '+(r.error||'unknown')).show(); return; }
+            $('#error-banner').hide();
+            renderDaemon(r.daemon);
+            renderSAs(r.sas);
+            $('#last-refresh').text('Last refresh: '+new Date().toLocaleTimeString()+' (auto-refresh every 5s)');
+        },
+        error: function() { $('#error-banner').text('Request failed').show(); }
+    });
+}
+
+$(document).ready(function() {
+    loadData();
+    setInterval(loadData, 5000);
+});
+</script>
+{% endblock %}

@@ -2,7 +2,8 @@ import os
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-ALLOWED_HOSTS = []
+_extra_hosts = [h.strip() for h in os.environ.get('STRONGMAN_ALLOWED_HOSTS', '').split(',') if h.strip()]
+ALLOWED_HOSTS = ['localhost', '127.0.0.1'] + _extra_hosts
 
 # Application definition
 

@@ -13,7 +13,7 @@ from strongMan.apps.pools.models import Pool
 from strongMan.helper_apps.vici.wrapper.wrapper import ViciWrapper
 
 from .specific import Child, Address, Proposal, LogMessage
-from .authentication import Authentication, AutoCaAuthentication
+from .authentication import Authentication, AutoCaAuthentication, PskAuthentication
 from strongMan.apps.certificates.models.certificates import Certificate
 
 
@@ -208,6 +208,31 @@ class IKEv2CertificateEAP(Connection):
     @classmethod
     def choice_name(cls):
         return "IKEv2 Certificate + EAP (Username/Password)"
+
+
+class IKEv2PSK(Connection):
+
+    @classmethod
+    def choice_name(cls):
+        return "IKEv2 PSK (Pre-Shared Key)"
+
+    def load(self):
+        super().load()
+        for local in self.server_local.all():
+            sub = local.subclass()
+            if isinstance(sub, PskAuthentication) and sub.psk:
+                owners = []
+                if sub.identity:
+                    owners.append(sub.identity)
+                for remote in self.server_remote.all():
+                    rsub = remote.subclass()
+                    if isinstance(rsub, PskAuthentication) and rsub.identity:
+                        owners.append(rsub.identity)
+                secret = OrderedDict(type='IKE', data=sub.psk)
+                if owners:
+                    secret['owners'] = owners
+                ViciWrapper().load_secret(secret)
+                break
 
 
 class IKEv2EapTls(Connection):

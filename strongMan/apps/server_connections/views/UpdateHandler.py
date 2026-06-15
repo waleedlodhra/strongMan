@@ -5,6 +5,7 @@ from django.contrib import messages
 from ..forms.ConnectionForms import AbstractConnectionForm, AbstractDynamicForm
 from ..models.connections import Connection
 from .ToggleHandler import ToggleHandler
+from ..conf_writer import write_all
 
 
 class UpdateHandler(object):
@@ -66,8 +67,11 @@ class UpdateHandler(object):
                 handler.unload(self.id)
                 form.update_connection(self.id)
                 handler.load(self.id)
+                errs = write_all()
+                for e in errs:
+                    messages.warning(self.request, e)
                 messages.success(self.request, "Connection " + self.connection.profile +
-                                 " has been updated and reloaded.")
+                                 " updated and reloaded.")
                 return redirect(reverse("server_connections:index"))
             else:
                 abstract_form = self._abstract_form()
@@ -79,7 +83,9 @@ class UpdateHandler(object):
                     return self._render(form)
 
                 form.update_connection(self.id)
-
+                errs = write_all()
+                for e in errs:
+                    messages.warning(self.request, e)
                 messages.success(self.request, "Connection " + self.connection.profile +
-                                 " has been updated.")
+                                 " updated.")
                 return redirect(reverse("server_connections:index"))

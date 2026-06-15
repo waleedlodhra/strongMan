@@ -13,6 +13,9 @@ from .CertificatePickerHandler import CertificatePickerHandler
 from .CaPickerHandler import CaPickerHandler
 from .PoolPickerHandler import PoolPickerHandler
 from .SaTerminateHandler import SaTerminateHandler
+from .SyncHandler import SyncFromConfHandler, ImportFromViciHandler
+from .MonitorHandler import MonitorPageHandler, MonitorDataHandler
+from .SecretsHandler import SecretsPageHandler, SecretsSaveHandler
 
 
 @require_http_methods('GET')
@@ -94,6 +97,44 @@ def get_certificatepicker(request):
 @require_http_methods(['POST'])
 def get_capicker(request):
     handler = CaPickerHandler(request)
+    return handler.handle()
+
+
+@login_required
+@require_http_methods(['GET'])
+def monitor(request):
+    return MonitorPageHandler(request).handle()
+
+
+@login_required
+@require_http_methods(['POST'])
+def monitor_data(request):
+    return MonitorDataHandler(request).handle()
+
+
+@login_required
+@require_http_methods(['GET'])
+def secrets(request):
+    return SecretsPageHandler(request).handle()
+
+
+@login_required
+@require_http_methods(['POST'])
+def secrets_save(request):
+    return SecretsSaveHandler(request).handle()
+
+
+@login_required
+@require_http_methods(['POST'])
+def sync_from_conf(request):
+    handler = SyncFromConfHandler(request)
+    return handler.handle()
+
+
+@login_required
+@require_http_methods(['POST'])
+def import_from_vici(request):
+    handler = ImportFromViciHandler(request)
     return handler.handle()
 
 

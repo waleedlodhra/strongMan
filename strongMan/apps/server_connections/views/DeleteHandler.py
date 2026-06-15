@@ -5,6 +5,7 @@ from strongMan.helper_apps.vici.wrapper.exception import ViciException
 
 from strongMan.apps.server_connections.models.connections import Connection
 from strongMan.helper_apps.vici.wrapper.wrapper import ViciWrapper
+from strongMan.apps.server_connections.conf_writer import write_all
 
 
 class DeleteHandler(object):
@@ -23,5 +24,8 @@ class DeleteHandler(object):
 
         profilname = connection.profile
         connection.delete()
+        errs = write_all()
+        for e in errs:
+            messages.warning(self.request, e)
         messages.info(self.request, "Connection " + profilname + " deleted.")
         return HttpResponseRedirect(reverse("server_connections:index"))

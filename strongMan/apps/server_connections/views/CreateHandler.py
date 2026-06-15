@@ -4,6 +4,7 @@ from django.contrib import messages
 
 from ..forms.ConnectionForms import AbstractDynamicForm, ChooseTypeForm
 from ..forms.SubForms import HeaderForm
+from ..conf_writer import write_all
 
 
 class AddHandler(object):
@@ -44,6 +45,10 @@ class AddHandler(object):
 
             if isinstance(form, HeaderForm):
                 form.create_connection(self.connection_type)
+                errs = write_all()
+                if errs:
+                    for e in errs:
+                        messages.warning(self.request, e)
                 messages.success(self.request, "Connection " + form.cleaned_data['profile'] +
-                                 " has been updated.")
+                                 " created.")
                 return redirect(reverse("server_connections:index"))

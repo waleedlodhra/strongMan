@@ -16,4 +16,10 @@ urlpatterns = [
     re_path(r'poolpicker/$', views.get_poolpicker, name='poolpicker'),
     re_path(r'certificatepicker/$', views.get_certificatepicker, name='certificatepicker'),
     re_path(r'capicker/$', views.get_capicker, name='capicker'),
+    re_path(r'sync/conf/$', views.sync_from_conf, name='sync_conf'),
+    re_path(r'sync/vici/$', views.import_from_vici, name='import_vici'),
+    re_path(r'monitor/$', views.monitor, name='monitor'),
+    re_path(r'monitor/data/$', views.monitor_data, name='monitor_data'),
+    re_path(r'secrets/$', views.secrets, name='secrets'),
+    re_path(r'secrets/save/$', views.secrets_save, name='secrets_save'),
 ]

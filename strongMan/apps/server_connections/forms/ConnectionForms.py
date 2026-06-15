@@ -2,9 +2,9 @@ import sys
 
 from django import forms
 from strongMan.apps.server_connections.forms.SubForms import HeaderForm, RemoteCertificateForm, \
-    RemoteIdentityForm, ServerCertificateForm, EapForm, EapTlsForm, PoolForm
+    RemoteIdentityForm, ServerCertificateForm, EapForm, EapTlsForm, PoolForm, PskForm
 from strongMan.apps.server_connections.models.connections import IKEv2Certificate, IKEv2EAP, \
-    IKEv2CertificateEAP, IKEv2EapTls
+    IKEv2CertificateEAP, IKEv2EapTls, IKEv2PSK
 
 
 class AbstractDynamicForm(forms.Form):
@@ -52,8 +52,9 @@ class ChooseTypeForm(AbstractDynamicForm):
     @classmethod
     def get_choices_site_to_site(cls):
         return tuple((
+            tuple((type(Ike2PskForm()).__name__, Ike2PskForm().model.choice_name)),
             tuple((type(Ike2CertificateForm()).__name__, Ike2CertificateForm().model.choice_name)),
-            tuple((type(Ike2EapTlsForm()).__name__, Ike2EapTlsForm().model.choice_name))
+            tuple((type(Ike2EapTlsForm()).__name__, Ike2EapTlsForm().model.choice_name)),
         ))
 
 
@@ -171,3 +172,13 @@ class Ike2EapTlsForm(AbstractConnectionForm, HeaderForm, EapTlsForm,
 
     def update_certs(self):
         self.update_certificates()
+
+
+class Ike2PskForm(AbstractConnectionForm, HeaderForm, PskForm, PoolForm):
+    @property
+    def model(self):
+        return IKEv2PSK
+
+    @property
+    def template(self):
+        return "server_connections/forms/Ike2PSK.html"

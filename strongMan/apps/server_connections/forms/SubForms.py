@@ -2,7 +2,7 @@ from django import forms
 from strongMan.apps.certificates.models import UserCertificate, AbstractIdentity
 from strongMan.apps.server_connections.models import Connection, Child, Address, Proposal, \
     AutoCaAuthentication, CaCertificateAuthentication, CertificateAuthentication, EapAuthentication, \
-    EapTlsAuthentication, IKEv2Certificate, IKEv2CertificateEAP
+    EapTlsAuthentication, IKEv2Certificate, IKEv2CertificateEAP, PskAuthentication
 from .FormFields import CertificateChoice, IdentityChoice, PoolChoice
 from strongMan.apps.pools.models import Pool
 
@@ -349,6 +349,52 @@ class EapTlsForm(ServerCertificateForm):
                 sub.remote_auth = self.cleaned_data['remote_auth']
                 sub.eap_id = self.cleaned_data['eap_id']
                 sub.save()
+
+
+class PskForm(forms.Form):
+    psk = forms.CharField(max_length=256, label="Pre-Shared Key", widget=forms.PasswordInput(render_value=True))
+    local_id = forms.CharField(max_length=200, label="Local Identity", required=False, initial="")
+    remote_id = forms.CharField(max_length=200, label="Remote Identity", required=False, initial="")
+
+    def fill(self, connection):
+        for local in connection.server_local.all():
+            sub = local.subclass()
+            if isinstance(sub, PskAuthentication):
+                self.initial['psk'] = sub.psk
+                self.initial['local_id'] = sub.identity
+                break
+        for remote in connection.server_remote.all():
+            sub = remote.subclass()
+            if isinstance(sub, PskAuthentication):
+                self.initial['remote_id'] = sub.identity
+                break
+
+    def create_connection(self, connection):
+        PskAuthentication(
+            name='local-1', auth='psk', local=connection,
+            psk=self.cleaned_data['psk'],
+            identity=self.cleaned_data['local_id'],
+        ).save()
+        PskAuthentication(
+            name='remote-1', auth='psk', remote=connection,
+            psk='',
+            identity=self.cleaned_data['remote_id'],
+        ).save()
+
+    def update_connection(self, connection):
+        for local in connection.server_local.all():
+            sub = local.subclass()
+            if isinstance(sub, PskAuthentication):
+                sub.psk = self.cleaned_data['psk']
+                sub.identity = self.cleaned_data['local_id']
+                sub.save()
+                break
+        for remote in connection.server_remote.all():
+            sub = remote.subclass()
+            if isinstance(sub, PskAuthentication):
+                sub.identity = self.cleaned_data['remote_id']
+                sub.save()
+                break
 
 
 class EapForm(forms.Form):

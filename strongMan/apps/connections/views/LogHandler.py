@@ -30,13 +30,19 @@ class LogHandler(object):
         LogMessage.objects.filter(timestamp__lt=time_threshold).delete()
 
     def _get_logs(self):
+        deadline = time.time() + 30
         while LogMessage.objects.all().count() == 0:
+            if time.time() >= deadline:
+                return LogMessage.objects.none()
             time.sleep(1)
         return LogMessage.objects.all().order_by('timestamp')
 
     def _get_new_logs(self):
+        deadline = time.time() + 30
         logs = LogMessage.objects.filter(pk__gt=self.id).order_by('timestamp')
         while logs.count() == 0:
+            if time.time() >= deadline:
+                return logs
             time.sleep(1)
             logs = LogMessage.objects.filter(pk__gt=self.id).order_by('timestamp')
         return logs

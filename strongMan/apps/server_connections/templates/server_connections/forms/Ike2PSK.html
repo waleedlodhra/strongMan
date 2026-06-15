@@ -1,0 +1,48 @@
+{% extends "server_connections/forms/ConnectionForm.html" %}
+{% load connections_extras %}
+{% block form_content %}
+    <div class="row">
+        <p class="col-xs-12">Pre-Shared Key authentication</p>
+        <div class="col-xs-12">
+            <p>Enter the shared secret used to authenticate both sides of the tunnel.</p>
+        </div>
+    </div>
+
+    <div class="row">
+        <label class="control-label col-sm-3 col-xs-12">Pre-Shared Key</label>
+        <div class="controls col-sm-8 col-xs-10">
+            <input type="password" class="form-control" name="psk" value="{{ form.psk.value }}"
+                   placeholder="Enter pre-shared key" autocomplete="new-password"/>
+            {% include "server_connections/forms/../widgets/errormsg.html" with field=form.psk %}
+        </div>
+        <div class="col-sm-1 col-xs-2">
+            {% include "server_connections/widgets/QuestionPopover.html" with title="PSK help" content="The pre-shared key (password) used to authenticate this IPsec tunnel. Both sides must use the same key." %}
+        </div>
+    </div>
+
+    <div class="row">
+        <label class="control-label col-sm-3 col-xs-12">Local Identity</label>
+        <div class="controls col-sm-8 col-xs-10">
+            <input type="text" class="form-control" name="local_id" value="{{ form.local_id.value }}"
+                   placeholder="e.g. 10.10.10.1 or @site1 (optional)"/>
+            {% include "server_connections/forms/../widgets/errormsg.html" with field=form.local_id %}
+        </div>
+        <div class="col-sm-1 col-xs-2">
+            {% include "server_connections/widgets/QuestionPopover.html" with title="Local identity help" content="Local IKE identity sent to the peer. Leave empty to use the local IP address." %}
+        </div>
+    </div>
+
+    <div class="row">
+        <label class="control-label col-sm-3 col-xs-12">Remote Identity</label>
+        <div class="controls col-sm-8 col-xs-10">
+            <input type="text" class="form-control" name="remote_id" value="{{ form.remote_id.value }}"
+                   placeholder="e.g. 10.10.10.2 or @site2 (optional)"/>
+            {% include "server_connections/forms/../widgets/errormsg.html" with field=form.remote_id %}
+        </div>
+        <div class="col-sm-1 col-xs-2">
+            {% include "server_connections/widgets/QuestionPopover.html" with title="Remote identity help" content="Expected IKE identity from the peer. Leave empty to accept any identity." %}
+        </div>
+    </div>
+
+    <hr>
+{% endblock form_content %}

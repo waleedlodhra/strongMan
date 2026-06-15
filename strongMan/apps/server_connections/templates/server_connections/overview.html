@@ -36,6 +36,87 @@
             {% endif %}
         </div>
 
+        <!-- Sync & Discovery Panel -->
+        <div class="col-xs-12" style="margin-top: 16px;">
+            <div class="panel panel-default">
+                <div class="panel-heading" style="cursor:pointer;" data-toggle="collapse" data-target="#sync-panel-body">
+                    <h4 class="panel-title" style="display:inline-block;">
+                        <i class="fa fa-refresh" aria-hidden="true"></i>
+                        StrongSwan Sync &amp; Discovery
+                    </h4>
+                    <small class="pull-right text-muted" style="margin-top:3px;">Click to expand</small>
+                </div>
+                <div id="sync-panel-body" class="panel-collapse collapse">
+                    <div class="panel-body">
+                        <form method="post" action="{% url 'server_connections:sync_conf' %}" style="display:inline;">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-info btn-sm">
+                                <i class="fa fa-file-text-o"></i> Sync all from /etc/ipsec.conf
+                            </button>
+                        </form>
+                        <small class="text-muted" style="margin-left:8px;">
+                            Reads ipsec.conf + ipsec.secrets and creates/updates all PSK connections in the GUI.
+                        </small>
+
+                        {% if vici_error %}
+                        <div class="alert alert-danger" style="margin-top:10px;">
+                            <strong>VICI error:</strong> {{ vici_error }}
+                        </div>
+                        {% endif %}
+
+                        {% if discovered %}
+                        <hr>
+                        <h5><i class="fa fa-eye"></i> Discovered in charon — not yet in GUI</h5>
+                        <p class="text-muted small">These connections are loaded in strongSwan but not managed by the GUI yet.</p>
+                        <table class="table table-condensed table-hover" style="margin-top:8px;">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Version</th>
+                                    <th>Auth</th>
+                                    <th>Local addr</th>
+                                    <th>Remote addr</th>
+                                    <th>Children</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for conn in discovered %}
+                                <tr>
+                                    <td><strong>{{ conn.name }}</strong></td>
+                                    <td>{{ conn.version }}</td>
+                                    <td>{{ conn.auth_class }}</td>
+                                    <td>{{ conn.local_addrs }}</td>
+                                    <td>{{ conn.remote_addrs }}</td>
+                                    <td>
+                                        {% for cname, cdetail in conn.children.items %}
+                                            <small>{{ cname }}: {{ cdetail.local_ts|join:", " }} ↔ {{ cdetail.remote_ts|join:", " }}</small><br>
+                                        {% endfor %}
+                                    </td>
+                                    <td>
+                                        <form method="post" action="{% url 'server_connections:import_vici' %}">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="name" value="{{ conn.name }}">
+                                            <button type="submit" class="btn btn-success btn-xs">
+                                                <i class="fa fa-plus"></i> Import
+                                            </button>
+                                        </form>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                        {% elif not vici_error %}
+                        <p class="text-muted small" style="margin-top:10px;">
+                            <i class="fa fa-check-circle text-success"></i>
+                            All charon connections are already in the GUI.
+                        </p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="form-row">
             <div class="col-xs-12">
                 <div class="panel-group" id="log_panel">
