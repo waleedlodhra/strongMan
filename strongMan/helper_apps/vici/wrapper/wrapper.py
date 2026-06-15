@@ -52,7 +52,12 @@ class ViciWrapper(object):
         :type connection_name: str
         '''
         if connection_name in self.get_connections_names():
-            self.session.unload_conn(OrderedDict(name=connection_name))
+            try:
+                self.session.unload_conn(OrderedDict(name=connection_name))
+            except Exception:
+                # Connection is managed by stroke (ipsec.conf), not VICI — ignore.
+                # terminate_connection() will still bring the SA down.
+                pass
 
     def load_secret(self, secret):
         '''
