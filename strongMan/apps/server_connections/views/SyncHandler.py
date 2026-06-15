@@ -1,7 +1,7 @@
 from django.contrib import messages
 from django.shortcuts import redirect
 
-from strongMan.apps.server_connections.sync import sync_from_conf, import_from_vici
+from strongMan.apps.server_connections.sync import auto_sync, import_from_vici
 
 
 class SyncFromConfHandler:
@@ -9,12 +9,21 @@ class SyncFromConfHandler:
         self.request = request
 
     def handle(self):
-        results = sync_from_conf()
+        fmt, results = auto_sync()
+        fmt_labels = {
+            'ipsec':     'ipsec.conf',
+            'swanctl':   'swanctl.conf',
+            'vici-only': 'VICI live query',
+        }
+        messages.info(self.request,
+            f"Sync method: {fmt_labels.get(fmt, fmt)}")
         for msg in results:
-            level = messages.SUCCESS if 'error' not in msg.lower() and 'skip' not in msg.lower() else messages.WARNING
+            level = (messages.SUCCESS
+                     if 'error' not in msg.lower() and 'skip' not in msg.lower()
+                     else messages.WARNING)
             messages.add_message(self.request, level, msg)
         if not results:
-            messages.info(self.request, "No connections found in /etc/ipsec.conf")
+            messages.info(self.request, "No connections found")
         return redirect('server_connections:index')
 
 
