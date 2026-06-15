@@ -29,7 +29,7 @@ with significant additions for server-side deployments.
 ## Quick Install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/strongMan.git
+git clone https://github.com/waleedlodhra/strongMan.git
 cd strongMan
 sudo bash install.sh
 ```
@@ -46,7 +46,7 @@ The installer will:
 
 ```bash
 # 1. Clone
-git clone https://github.com/YOUR_USERNAME/strongMan.git /opt/strongman
+git clone https://github.com/waleedlodhra/strongMan.git /opt/strongman
 cd /opt/strongman
 
 # 2. Virtualenv
