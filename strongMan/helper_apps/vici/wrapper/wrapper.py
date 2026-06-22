@@ -8,7 +8,23 @@ from .exception import ViciSocketException, ViciTerminateException, ViciLoadExce
 
 
 class ViciWrapper(object):
-    def __init__(self, socket_path="/var/run/charon.vici"):
+    _SOCKET_CANDIDATES = [
+        '/var/run/charon.vici',
+        '/run/charon.vici',
+        '/var/run/strongswan/charon.vici',
+        '/run/strongswan/charon.vici',
+    ]
+
+    @classmethod
+    def _find_socket(cls):
+        for path in cls._SOCKET_CANDIDATES:
+            if os.path.exists(path):
+                return path
+        return cls._SOCKET_CANDIDATES[0]
+
+    def __init__(self, socket_path=None):
+        if socket_path is None:
+            socket_path = self._find_socket()
         self.socket_path = socket_path
         if not os.path.exists(self.socket_path):
             raise ViciSocketException(self.socket_path + " doesn't exist!")
@@ -186,6 +202,9 @@ class ViciWrapper(object):
                 message = log['msg'].decode('ascii')
                 yield OrderedDict(message=message)
         except Exception as e:
+            err = str(e).lower()
+            if 'no matching' in err:
+                return   # SA already down — not an error
             raise ViciTerminateException("Can't terminate connection " + connection_name + "! " + str(e))
 
     def terminate_ike_sa(self, unique_sa_id):

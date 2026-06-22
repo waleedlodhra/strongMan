@@ -11,12 +11,8 @@
                            data-onstyle="success"
                            {% if record.subclass.is_remote_access %}
                                 data-on="Loaded" data-off="Unloaded"
-                           {% elif record.subclass.is_site_to_site %}
-                                {% if record.subclass.initiate %}
-                                    data-on="On" data-off="Off"
-                                {% else %}
-                                    data-on="Loaded" data-off="Unloaded"
-                                {% endif %}
+                           {% else %}
+                                data-on="On" data-off="Off"
                            {% endif %}
                            {% if record.state == 'ESTABLISHED' or record.state == 'LOADED' %}checked{% endif %}>
                 </div>
@@ -50,4 +46,3 @@
         hideConnectionInfoRow({{ record.id }});
     });</script>
 {% endif %}
-

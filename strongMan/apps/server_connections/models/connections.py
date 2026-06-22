@@ -32,6 +32,12 @@ class Connection(models.Model):
     enabled = models.BooleanField(default=False)
     connection_type = models.TextField()
     initiate = models.BooleanField(null=True, blank=True, default=None)
+    dpd_delay     = models.IntegerField(null=True, blank=True, default=None)
+    dpd_timeout   = models.IntegerField(null=True, blank=True, default=None)
+    aggressive    = models.BooleanField(null=True, blank=True, default=None)
+    rightsourceip = models.TextField(default='')
+    ikelifetime   = models.IntegerField(null=True, blank=True, default=None)
+    keyingtries   = models.IntegerField(null=True, blank=True, default=None)
 
     def dict(self):
         children = OrderedDict()
@@ -42,18 +48,28 @@ class Connection(models.Model):
         if self.pool is not None:
             ike_sa['pools'] = [self.pool.poolname]
         local_address = [local_address.value for local_address in self.server_local_addresses.all()]
-        if local_address[0] != '':
+        if local_address and local_address[0] != '':
             ike_sa['local_addrs'] = local_address
         remote_address = [remote_address.value for remote_address in self.server_remote_addresses.all()]
-        if remote_address[0] != '':
+        if remote_address and remote_address[0] != '':
             ike_sa['remote_addrs'] = remote_address
         ike_sa['version'] = self.version
-        ike_sa['proposals'] = [proposal.type for proposal in self.server_proposals.all()]
+        ike_sa['proposals'] = [proposal.type.rstrip('!') for proposal in self.server_proposals.all()]
         ike_sa['children'] = children
         if self.send_certreq == '1':
             ike_sa['send_certreq'] = 'yes'
         else:
             ike_sa['send_certreq'] = 'no'
+        if self.dpd_delay is not None:
+            ike_sa['dpd_delay'] = self.dpd_delay
+        if self.dpd_timeout is not None:
+            ike_sa['dpd_timeout'] = self.dpd_timeout
+        if self.aggressive:
+            ike_sa['aggressive'] = 'yes'
+        if self.ikelifetime is not None:
+            ike_sa['rekey_time'] = self.ikelifetime
+        if self.keyingtries is not None:
+            ike_sa['keyingtries'] = self.keyingtries
 
         for local in self.server_local.all():
             local = local.subclass()
@@ -90,8 +106,19 @@ class Connection(models.Model):
 
     def start(self):
         self.load()
-        if self.initiate:
-            vici_wrapper = ViciWrapper()
+        vici_wrapper = ViciWrapper()
+        if self.is_site_to_site():
+            # Always initiate for site-to-site regardless of DB initiate flag.
+            # Stroke connections with auto=add have initiate=False but the GUI
+            # must still be able to bring them up on demand.
+            for child in self.server_children.all():
+                try:
+                    logs = vici_wrapper.initiate(child.name, self.profile)
+                    for log in logs:
+                        LogMessage(connection=self, message=log['message']).save()
+                except Exception:
+                    pass  # best-effort — stroke-managed connections may ignore this
+        elif self.initiate:
             for child in self.server_children.all():
                 logs = vici_wrapper.initiate(child.name, self.profile)
                 for log in logs:
@@ -106,9 +133,13 @@ class Connection(models.Model):
     def stop(self):
         self.unload()
         vici_wrapper = ViciWrapper()
-        logs = vici_wrapper.terminate_connection(self.profile)
-        for log in logs:
-            LogMessage(connection=self, message=log['message']).save()
+        try:
+            logs = vici_wrapper.terminate_connection(self.profile)
+            for log in logs:
+                LogMessage(connection=self, message=log['message']).save()
+        except Exception as e:
+            if 'no matching' not in str(e).lower():
+                raise
 
     @classmethod
     def get_types(cls):
@@ -145,24 +176,25 @@ class Connection(models.Model):
     @property
     def state(self):
         vici_wrapper = ViciWrapper()
-        if self.is_remote_access() or self.is_site_to_site() and not self.initiate:
+        if self.is_remote_access():
+            # Remote-access: charon loads/unloads the config — use loaded check
             try:
                 loaded = vici_wrapper.is_connection_loaded(self.profile)
-                if loaded:
-                    return State.LOADED.value
-                else:
-                    return State.UNLOADED.value
+                return State.LOADED.value if loaded else State.UNLOADED.value
             except Exception:
                 return State.UNLOADED.value
         else:
+            # Site-to-site: always check live SA state (works for both stroke
+            # and VICI-managed connections; avoids is_connection_loaded which
+            # always returns True for stroke-managed conns)
             try:
                 state = vici_wrapper.get_connection_state(self.profile)
-                if state == State.DOWN.value:
-                    return State.DOWN.value
-                elif state == State.ESTABLISHED.value:
+                if state == State.ESTABLISHED.value:
                     return State.ESTABLISHED.value
                 elif state == State.CONNECTING.value:
                     return State.CONNECTING.value
+                else:
+                    return State.DOWN.value
             except Exception:
                 return State.DOWN.value
 

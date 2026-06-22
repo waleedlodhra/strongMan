@@ -44,18 +44,45 @@ class Child(models.Model):
                                     default=None)
     connection = models.ForeignKey("server_connections.Connection", null=True, blank=True, default=None,
                                    related_name='server_children', on_delete=models.CASCADE)
+    dpd_action   = models.TextField(default='')
+    mark         = models.TextField(default='')
+    mark_in      = models.TextField(default='')
+    mark_out     = models.TextField(default='')
+    close_action = models.TextField(default='')
+    keylife      = models.IntegerField(null=True, blank=True, default=None)
+    rekeymargin  = models.IntegerField(null=True, blank=True, default=None)
+    rekey        = models.BooleanField(null=True, blank=True, default=None)
+    compress     = models.BooleanField(null=True, blank=True, default=None)
 
     def dict(self):
         child = OrderedDict()
         local_ts = [local_t.value for local_t in self.server_local_ts.all()]
-        if local_ts[0] != '':
+        if local_ts and local_ts[0] != '':
             child['local_ts'] = local_ts
         remote_ts = [remote_t.value for remote_t in self.server_remote_ts.all()]
-        if remote_ts[0] != '':
+        if remote_ts and remote_ts[0] != '':
             child['remote_ts'] = remote_ts
-        child['esp_proposals'] = [esp_proposal.type for esp_proposal in self.server_esp_proposals.all()]
-        if self.start_action != '':
+        child['esp_proposals'] = [esp_proposal.type.rstrip('!') for esp_proposal in self.server_esp_proposals.all()]
+        if self.start_action and self.start_action != '':
             child['start_action'] = self.start_action
+        if self.dpd_action:
+            child['dpd_action'] = self.dpd_action
+        if self.mark:
+            child['mark'] = self.mark
+        if self.mark_in:
+            child['mark_in'] = self.mark_in
+        if self.mark_out:
+            child['mark_out'] = self.mark_out
+        if self.close_action:
+            child['close_action'] = self.close_action
+        if self.keylife is not None:
+            child['life_time'] = self.keylife
+        if self.rekeymargin is not None:
+            child['rand_time'] = self.rekeymargin
+        if self.rekey is False:
+            child['rekey_time'] = 0
+        if self.compress:
+            child['ipcomp'] = 'yes'
         return child
 
 

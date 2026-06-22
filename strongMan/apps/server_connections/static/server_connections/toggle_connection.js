@@ -2,10 +2,16 @@ $(document).ready(function () {
     $("[id^=toggle_connection]").on('click', handler);
 });
 
+var _pollRetries = {};   // retry counters keyed by connection id
+
 function handler(event) {
     event.preventDefault();
     var connectionId = this.id.value;
     var csrf = this.csrfmiddlewaretoken.value;
+
+    // Reset retry counter on each new user click
+    delete _pollRetries[connectionId];
+
     $.ajax({
         data: $(this).serialize(),
         type: 'POST',
@@ -14,10 +20,12 @@ function handler(event) {
             if (!response.success) {
                 setAlert(response);
                 stateDown(response.id);
+                unlock(response.id);
             }
         }
     });
-    stateConnecting(connectionId);
+
+    stateConnecting(connectionId, true);   // lock only on initial click
     setTimeout(function () {
         getState(connectionId, csrf);
     }, 900);
@@ -40,14 +48,16 @@ function stateDown(connectionId) {
     button.find('.toggle').attr("class", 'toggle btn btn-default off');
 }
 
-function stateConnecting(connectionId) {
+function stateConnecting(connectionId, doLock) {
     var button = $('#button_div' + connectionId);
     button.find('.toggle-on').text("");
     button.find('.toggle-on').append("<i class='glyphicon glyphicon-refresh spinning'></i>");
     button.find('.toggle-on').attr("class", "btn btn-warning toggle-on");
     button.find('.toggle').attr("class", 'toggle btn btn-warning');
     $('#toggle_input' + connectionId).prop('checked', true).change();
-    lock(connectionId);
+    if (doLock !== false) {
+        lock(connectionId);
+    }
 }
 
 function stateLoaded(connectionId) {
@@ -67,15 +77,26 @@ function stateUnloaded(connectionId) {
 }
 
 function lock(connectionId) {
-    $('#toggle_connection' + connectionId).unbind('click');
-    setTimeout(function () { unlock(connectionId); }, 1000);
+    $('#toggle_connection' + connectionId).off('click');
 }
 
 function unlock(connectionId) {
-    $('#toggle_connection' + connectionId).on('click', handler);
+    // .off().on() prevents double-binding if unlock is called multiple times
+    $('#toggle_connection' + connectionId).off('click').on('click', handler);
 }
 
 function getState(connectionId, csrf) {
+    if (!_pollRetries[connectionId]) _pollRetries[connectionId] = 0;
+    _pollRetries[connectionId]++;
+
+    // Give up after ~45 seconds (50 × 900ms) to avoid infinite CONNECTING loop
+    if (_pollRetries[connectionId] > 50) {
+        stateDown(connectionId);
+        unlock(connectionId);
+        delete _pollRetries[connectionId];
+        return;
+    }
+
     $.ajax({
         data: {'csrfmiddlewaretoken': csrf},
         type: 'POST',
@@ -84,31 +105,45 @@ function getState(connectionId, csrf) {
             if (response.success) {
                 switch (response.state) {
                     case 'CONNECTING':
-                        stateConnecting(response.id);
+                        stateConnecting(response.id, false);   // no lock from poll
                         hideConnectionInfoRow(response.id);
                         setTimeout(function () { getState(connectionId, csrf); }, 900);
                         break;
                     case 'ESTABLISHED':
+                        delete _pollRetries[connectionId];
+                        unlock(response.id);
                         stateEstablished(response.id);
                         showConnectionInfoRow(response.id, csrf);
                         break;
                     case 'LOADED':
+                        delete _pollRetries[connectionId];
+                        unlock(response.id);
                         stateLoaded(response.id);
                         showConnectionInfoRow(response.id, csrf);
                         break;
                     case 'UNLOADED':
+                        delete _pollRetries[connectionId];
+                        unlock(response.id);
                         stateUnloaded(response.id);
-                        hideConnectionInfoRow(response.id, csrf);
+                        hideConnectionInfoRow(response.id);
                         break;
                     default:
+                        delete _pollRetries[connectionId];
+                        unlock(response.id);
                         stateDown(response.id);
                         hideConnectionInfoRow(response.id);
                         break;
                 }
             } else {
+                delete _pollRetries[connectionId];
+                unlock(response.id);
                 setAlert(response);
                 stateDown(response.id);
             }
+        },
+        error: function () {
+            // Network error — keep polling
+            setTimeout(function () { getState(connectionId, csrf); }, 900);
         }
     });
 }
@@ -248,8 +283,8 @@ function fillInfos(conn_id, rows, child) {
     $('#connection-' + conn_id + '-sas tr').remove();
 
     for (var i = 0; i < rows; i++) {
-        var ike = child[i];
-        var id  = ike.uniqueid;
+        var ike  = child[i];
+        var id   = ike.uniqueid;
         var encr = (ike.encr_alg || '') + (ike.encr_keysize ? '/' + ike.encr_keysize : '');
 
         // ── IKE SA row ───────────────────────────────────────────────────────
@@ -274,15 +309,14 @@ function fillInfos(conn_id, rows, child) {
         var nr = Object.keys(child_sas).length;
         if (nr === 0) continue;
 
-        var csa_row = document.createElement('tr');
-        csa_row.id = 'child_sas' + id;
+        var csa_row  = document.createElement('tr');
+        csa_row.id   = 'child_sas' + id;
 
         var csa_cell = document.createElement('td');
         csa_cell.className = 'child-sa-cell';
-        csa_cell.colSpan = 7;
+        csa_cell.colSpan   = 7;
         csa_cell.style.cssText = 'padding: 0 0 0 20px; background-color:#eef1f7;';
 
-        // scrollable wrapper so wide columns don't squeeze the layout
         var wrapper = document.createElement('div');
         wrapper.className = 'child-sa-table-wrapper';
 
@@ -302,12 +336,12 @@ function fillInfos(conn_id, rows, child) {
             var cid = cs.uniqueid;
             var cr  = document.createElement('tr');
 
-            cr.appendChild(makeTd(cs.name    || '—',  'child-sa-cell'));
-            cr.appendChild(makeTd(stateBadge(cs.state), 'child-sa-cell'));
-            cr.appendChild(makeTd(cs.local_ts  || '—', 'child-sa-cell'));
-            cr.appendChild(makeTd(cs.remote_ts || '—', 'child-sa-cell'));
-            cr.appendChild(makeTd(formatBytes(cs.bytes_in),  'child-sa-cell'));
-            cr.appendChild(makeTd(formatBytes(cs.bytes_out), 'child-sa-cell'));
+            cr.appendChild(makeTd(cs.name      || '—',  'child-sa-cell'));
+            cr.appendChild(makeTd(stateBadge(cs.state),  'child-sa-cell'));
+            cr.appendChild(makeTd(cs.local_ts  || '—',  'child-sa-cell'));
+            cr.appendChild(makeTd(cs.remote_ts || '—',  'child-sa-cell'));
+            cr.appendChild(makeTd(formatBytes(cs.bytes_in),   'child-sa-cell'));
+            cr.appendChild(makeTd(formatBytes(cs.bytes_out),  'child-sa-cell'));
             cr.appendChild(makeTd(cs.packets_in  || '0', 'child-sa-cell'));
             cr.appendChild(makeTd(cs.packets_out || '0', 'child-sa-cell'));
             cr.appendChild(makeTd(formatSeconds(cs.install_time) + ' ago', 'child-sa-cell'));

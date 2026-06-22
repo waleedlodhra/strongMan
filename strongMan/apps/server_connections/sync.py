@@ -23,16 +23,12 @@ from strongMan.apps.server_connections.models.authentication import Authenticati
 # ─── VICI socket auto-detection ───────────────────────────────────────────────
 
 def find_vici_socket():
-    """
-    Return the VICI socket path, checking common locations and strongSwan config.
-    """
     candidates = [
         '/var/run/charon.vici',
         '/run/charon.vici',
         '/var/run/strongswan/charon.vici',
         '/run/strongswan/charon.vici',
     ]
-    # Check vici plugin config for a custom socket path
     for cfg in ['/etc/strongswan.d/charon/vici.conf',
                 '/etc/strongswan/strongswan.d/charon/vici.conf']:
         try:
@@ -46,15 +42,12 @@ def find_vici_socket():
     for path in candidates:
         if os.path.exists(path):
             return path
-    return '/var/run/charon.vici'   # best-guess fallback
+    return '/var/run/charon.vici'
 
 
 # ─── ipsec.conf parser (stroke / legacy) ──────────────────────────────────────
 
 def _resolve_ipsec_includes(path):
-    """
-    Return lines from path, expanding any 'include' directives (ipsec.d/*.conf).
-    """
     lines = []
     base = os.path.dirname(path)
     try:
@@ -75,34 +68,87 @@ def _resolve_ipsec_includes(path):
 
 
 def parse_ipsec_conf(path='/etc/ipsec.conf'):
-    """Parse ipsec.conf (+ includes) → list of conn dicts."""
-    connections = []
-    current = None
+    """
+    Parse ipsec.conf (+ includes) → list of conn dicts.
+
+    Handles:
+    - %default block: values merged as defaults into every conn
+    - also=: recursive two-pass inheritance with cycle protection
+    - _is_template: True for conns referenced by also= (used to skip empty template entries)
+    """
+    # ── First pass: collect raw blocks ──────────────────────────────────────
+    raw_defaults = {}
+    raw_conns    = {}
+    raw_order    = []
+    current_name = None
+    current      = {}
+
+    def _flush():
+        nonlocal current_name, current
+        if current_name is None:
+            return
+        if current_name == '%default':
+            raw_defaults.update(current)
+        else:
+            if current_name not in raw_conns:
+                raw_order.append(current_name)
+            raw_conns[current_name] = current
+        current_name = None
+        current = {}
+
     for raw in _resolve_ipsec_includes(path):
         line = raw.strip()
         if not line or line.startswith('#'):
             continue
         if line.startswith('conn '):
-            name = line.split(None, 1)[1].strip()
-            if name == '%default':
-                current = None
-            else:
-                current = {'_name': name}
-                connections.append(current)
+            _flush()
+            current_name = line.split(None, 1)[1].strip()
+            current = {}
             continue
-        if current is not None and '=' in line:
+        if current_name is not None and '=' in line:
             key, _, val = line.partition('=')
             current[key.strip()] = val.strip()
-    if not connections:
+    _flush()
+
+    if not raw_conns:
         raise FileNotFoundError(f"No connections found in {path}")
+
+    # ── Track which conns are referenced by also= (they are templates) ──────
+    also_targets = set()
+    for block in raw_conns.values():
+        also = block.get('also', '').strip()
+        if also:
+            also_targets.add(also)
+
+    # ── Second pass: resolve also= recursively (cycle-safe) ─────────────────
+    def _merge_also(name, visited=None):
+        if visited is None:
+            visited = set()
+        if name in visited or name not in raw_conns:
+            return {}
+        visited = visited | {name}
+        block = raw_conns[name].copy()
+        also  = block.pop('also', None)
+        if also:
+            base   = _merge_also(also.strip(), visited)
+            merged = {**base, **block}
+            return merged
+        return block
+
+    # ── Build final list: %default < also-chain < own-block ─────────────────
+    connections = []
+    for name in raw_order:
+        resolved = _merge_also(name)
+        final    = {**raw_defaults, **resolved, '_name': name}
+        final['_is_template'] = (name in also_targets)
+        connections.append(final)
+
     return connections
 
 
 def parse_ipsec_secrets(path='/etc/ipsec.secrets'):
-    """Parse ipsec.secrets → {(left, right): psk} dict."""
     psks = {}
     secrets_files = [path]
-    # also check /etc/ipsec.d/
     d = os.path.join(os.path.dirname(path), 'ipsec.d')
     secrets_files += sorted(glob.glob(os.path.join(d, '*.secrets')))
     for p in secrets_files:
@@ -134,7 +180,6 @@ def parse_ipsec_secrets(path='/etc/ipsec.secrets'):
 # ─── swanctl.conf parser (modern vici / swanctl) ──────────────────────────────
 
 def _swanctl_files():
-    """Return all swanctl config file paths to parse."""
     candidates = []
     for path in ['/etc/swanctl/swanctl.conf',
                  '/etc/strongswan/swanctl/swanctl.conf']:
@@ -147,15 +192,10 @@ def _swanctl_files():
 
 
 def _parse_swanctl_block(text):
-    """
-    Minimal recursive parser for strongSwan swanctl.conf block syntax.
-    Returns a nested dict. Values are strings; nested blocks are dicts.
-    """
     result = {}
     i = 0
     text = text.strip()
     while i < len(text):
-        # skip whitespace and comments
         while i < len(text) and text[i] in ' \t\r\n':
             i += 1
         if i >= len(text):
@@ -164,7 +204,6 @@ def _parse_swanctl_block(text):
             while i < len(text) and text[i] != '\n':
                 i += 1
             continue
-        # find key
         key_start = i
         while i < len(text) and text[i] not in '={#\n':
             i += 1
@@ -205,10 +244,6 @@ def _parse_swanctl_block(text):
 
 
 def parse_swanctl_conf(paths=None):
-    """
-    Parse swanctl.conf file(s) → list of conn dicts (same format as parse_ipsec_conf).
-    Returns (connections_list, psks_dict).
-    """
     if paths is None:
         paths = _swanctl_files()
 
@@ -224,10 +259,9 @@ def parse_swanctl_conf(paths=None):
         except FileNotFoundError:
             pass
 
-    conns_raw = merged.get('connections', {})
+    conns_raw   = merged.get('connections', {})
     secrets_raw = merged.get('secrets', {})
 
-    # Build PSK dict from secrets block
     psks = {}
     for sec_name, sec in secrets_raw.items():
         if not isinstance(sec, dict):
@@ -235,7 +269,6 @@ def parse_swanctl_conf(paths=None):
         secret = sec.get('secret', '')
         if not secret:
             continue
-        # collect id-* keys
         ids = [v for k, v in sec.items() if k.startswith('id')]
         if len(ids) >= 2:
             psks.setdefault((ids[0], ids[1]), secret)
@@ -245,21 +278,18 @@ def parse_swanctl_conf(paths=None):
         else:
             psks.setdefault(('%any', '%any'), secret)
 
-    # Build connections list in same format as parse_ipsec_conf
     connections = []
     for conn_name, conn in conns_raw.items():
         if not isinstance(conn, dict):
             continue
-        # Skip template-only entries (all-comment / no real data)
-        local_addrs = conn.get('local_addrs', '')
+        local_addrs  = conn.get('local_addrs', '')
         remote_addrs = conn.get('remote_addrs', '')
         if not local_addrs and not remote_addrs:
             continue
 
-        version = conn.get('version', '2')
+        version  = conn.get('version', '2')
         ike_prop = conn.get('proposals', '')
 
-        # Determine auth type from local section
         local_auth = 'pubkey'
         for k, v in conn.items():
             if k.startswith('local') and isinstance(v, dict):
@@ -268,35 +298,34 @@ def parse_swanctl_conf(paths=None):
 
         children = conn.get('children', {})
         if not isinstance(children, dict) or not children:
-            # No children defined — treat whole conn as one child
             children = {conn_name: conn}
 
         for child_name, child in children.items():
             if not isinstance(child, dict):
                 continue
-            lts = child.get('local_ts', '')
-            rts = child.get('remote_ts', '')
-            esp = child.get('esp_proposals', '')
+            lts   = child.get('local_ts', '')
+            rts   = child.get('remote_ts', '')
+            esp   = child.get('esp_proposals', '')
             start = child.get('start_action', 'none')
             connections.append({
-                '_name':      child_name,
-                '_ike_name':  conn_name,
-                'left':       local_addrs.split(',')[0].strip() if local_addrs else '',
-                'right':      remote_addrs.split(',')[0].strip() if remote_addrs else '',
+                '_name':       child_name,
+                '_ike_name':   conn_name,
+                '_is_template': False,
+                'left':        local_addrs.split(',')[0].strip() if local_addrs else '',
+                'right':       remote_addrs.split(',')[0].strip() if remote_addrs else '',
                 'keyexchange': f'ikev{version}',
-                'authby':     'secret' if local_auth == 'psk' else local_auth,
-                'ike':        ike_prop,
-                'leftsubnet': lts,
+                'authby':      'secret' if local_auth == 'psk' else local_auth,
+                'ike':         ike_prop,
+                'leftsubnet':  lts,
                 'rightsubnet': rts,
-                'esp':        esp,
-                'auto':       'start' if start in ('start', 'trap') else 'add',
+                'esp':         esp,
+                'auto':        'start' if start in ('start', 'trap') else 'add',
             })
 
     return connections, psks
 
 
 def _has_real_swanctl_conns(paths=None):
-    """Return True if swanctl config files contain actual (non-template) connections."""
     if paths is None:
         paths = _swanctl_files()
     for path in paths:
@@ -304,7 +333,7 @@ def _has_real_swanctl_conns(paths=None):
             with open(path) as f:
                 content = f.read()
             parsed = _parse_swanctl_block(content)
-            conns = parsed.get('connections', {})
+            conns  = parsed.get('connections', {})
             for name, block in conns.items():
                 if isinstance(block, dict) and (
                     block.get('local_addrs') or block.get('remote_addrs')
@@ -315,7 +344,7 @@ def _has_real_swanctl_conns(paths=None):
     return False
 
 
-# ─── PSK lookup (works for both ipsec.secrets and swanctl formats) ─────────────
+# ─── PSK lookup ───────────────────────────────────────────────────────────────
 
 def lookup_psk(psks, left, right):
     for key in [(left, right), (right, left), (left, '%any'), ('%any', right), ('%any', '%any')]:
@@ -328,20 +357,41 @@ def lookup_psk(psks, left, right):
 
 def _detect_version(conf):
     ke = conf.get('keyexchange', 'ikev2').lower()
-    return '1' if ke in ('ikev1', 'ike') else '2'
+    if ke == 'ikev1':
+        return '1'
+    elif ke == 'ikev2':
+        return '2'
+    else:
+        return '0'   # 'ike' = any version
 
 
 def _normalise_proposal(raw):
-    return raw.rstrip('!') if raw else None
+    # Keep '!' — it's stripped at VICI send time in dict() methods, not in DB
+    return raw.strip() if raw else None
+
+
+def _is_psk_auth(conf):
+    """Return True for any PSK-based authentication variant."""
+    authby = conf.get('authby', '').lower()
+    if authby in ('secret', 'psk', 'xauthpsk', 'xauth', 'xauthpsk+xauthpsk'):
+        return True
+    # leftauth/rightauth split format
+    leftauth  = conf.get('leftauth',  '').lower()
+    rightauth = conf.get('rightauth', '').lower()
+    if leftauth in ('psk', 'secret', 'xauth') or rightauth in ('psk', 'secret', 'xauth'):
+        return True
+    return False
 
 
 def _ike_group_key(conf):
+    """Group key for connections that share the same IKE SA (same peer + crypto)."""
     return (
-        conf.get('left', ''),
-        conf.get('right', ''),
+        conf.get('left',        ''),
+        conf.get('right',       ''),
         conf.get('keyexchange', 'ikev2').lower(),
-        conf.get('authby', 'pubkey').lower(),
-        conf.get('ike', ''),
+        conf.get('authby',      'pubkey').lower(),
+        conf.get('ike',         ''),
+        conf.get('type',        'tunnel').lower(),   # separate transport from tunnel
     )
 
 
@@ -350,18 +400,19 @@ def _ike_group_key(conf):
 def upsert_connection_group(primary_conf, child_confs, psks):
     """
     Create/update ONE DB Connection for a group of conn blocks sharing the same
-    IKE SA. Each conf block becomes a Child SA.
+    IKE SA. Each conf block (that has subnets or is standalone) becomes a Child SA.
+    Template conns (referenced by also=, no subnets) are skipped as children.
     Returns (conn, created, message).
     """
     name = primary_conf['_name']
-    authby = primary_conf.get('authby', 'pubkey').lower()
 
-    if authby not in ('secret', 'psk'):
+    if not _is_psk_auth(primary_conf):
+        authby = primary_conf.get('authby', 'pubkey')
         skipped = [c['_name'] for c in [primary_conf] + child_confs]
-        return None, False, f"{', '.join(skipped)}: skipped (auth={authby} — certificate, add manually)"
+        return None, False, f"{', '.join(skipped)}: skipped (auth={authby} — certificate/EAP, add manually)"
 
-    left  = primary_conf.get('left', '')
-    right = primary_conf.get('right', '')
+    left      = primary_conf.get('left',  '')
+    right     = primary_conf.get('right', '')
     version   = _detect_version(primary_conf)
     ike_prop  = _normalise_proposal(primary_conf.get('ike', ''))
     auto      = primary_conf.get('auto', 'ignore')
@@ -400,24 +451,53 @@ def upsert_connection_group(primary_conf, child_confs, psks):
         name='remote-1', auth='psk', round=1, remote=conn, psk='', identity=right,
     )
 
+    # ── Create Child SAs ─────────────────────────────────────────────────────
     conn.server_children.all().delete()
-    for conf in [primary_conf] + child_confs:
-        lts = [s.strip() for s in conf.get('leftsubnet',  '').split(',') if s.strip()]
+
+    all_confs = [primary_conf] + child_confs
+
+    # Does any conf in this group have explicit traffic selectors?
+    has_any_subnets = any(
+        c.get('leftsubnet', '').strip() or c.get('rightsubnet', '').strip()
+        for c in all_confs
+    )
+
+    created_children = 0
+    for conf in all_confs:
+        lts = [s.strip() for s in conf.get('leftsubnet', '').split(',') if s.strip()]
         rts = [s.strip() for s in conf.get('rightsubnet', '').split(',') if s.strip()]
-        esp = _normalise_proposal(conf.get('esp', ''))
-        child = Child.objects.create(
-            name=conf['_name'], mode='tunnel', start_action='start', connection=conn,
-        )
+
+        # Skip template conns (referenced by also=, no subnets) when the group has
+        # real children with subnets — they are pure IKE SA config templates.
+        if conf.get('_is_template') and not lts and not rts and has_any_subnets:
+            continue
+
+        esp   = _normalise_proposal(conf.get('esp', ''))
+        child = Child(name=conf['_name'], mode='tunnel', start_action='start', connection=conn)
+        child.save()
+
         for ts in lts:
             Address.objects.create(value=ts, local_ts=child)
         for ts in rts:
             Address.objects.create(value=ts, remote_ts=child)
         if esp:
             Proposal.objects.create(type=esp, child=child)
+        created_children += 1
 
-    child_names = [c['_name'] for c in [primary_conf] + child_confs]
+    # If nothing was created (all were templates — shouldn't happen, but guard):
+    if created_children == 0:
+        child = Child(name=name, mode='tunnel', start_action='start', connection=conn)
+        child.save()
+
+    # Build display list of real (non-template) children
+    real_child_names = [c['_name'] for c in all_confs if not (
+        c.get('_is_template') and not c.get('leftsubnet', '').strip()
+        and not c.get('rightsubnet', '').strip() and has_any_subnets
+    )]
+    # Skip the primary name itself from children display to avoid redundancy
+    display_children = [n for n in real_child_names if n != name]
     verb  = 'created' if created else 'updated'
-    extra = f" (+children: {', '.join(child_names[1:])})" if len(child_names) > 1 else ""
+    extra = f" (children: {', '.join(display_children)})" if display_children else ""
     return conn, created, f"{name}: {verb}{extra}"
 
 
@@ -436,9 +516,11 @@ def _apply_groups(conns, psks):
             order.append(key)
         groups[key].append(conf)
 
+    # Collect names that appear as non-primary (child) profiles in a group
     child_profiles = set()
     for key in order:
-        for c in groups[key][1:]:
+        group = groups[key]
+        for c in group[1:]:
             child_profiles.add(c['_name'])
 
     messages = []
@@ -458,31 +540,56 @@ def _apply_groups(conns, psks):
     return messages
 
 
+def sync_cleanup(conf_names):
+    """Remove DB connections whose profile is not in conf_names."""
+    removed = []
+    for conn in Connection.objects.all():
+        if conn.profile not in conf_names:
+            conn.delete()
+            removed.append(conn.profile)
+    return removed
+
+
 # ─── format-specific sync functions ───────────────────────────────────────────
 
 def sync_from_conf(conf_path='/etc/ipsec.conf', secrets_path='/etc/ipsec.secrets'):
-    """Sync from ipsec.conf + ipsec.secrets (stroke/legacy format)."""
+    """Sync from ipsec.conf + ipsec.secrets. Also removes DB entries no longer in conf."""
     try:
         conns = parse_ipsec_conf(conf_path)
     except FileNotFoundError:
         return [f"Error: {conf_path} not found or has no connections"]
     psks = parse_ipsec_secrets(secrets_path)
-    return _apply_groups(conns, psks)
+
+    messages = _apply_groups(conns, psks)
+
+    # Remove stale DB connections not present in ipsec.conf
+    conf_names = {c['_name'] for c in conns}
+    removed = sync_cleanup(conf_names)
+    if removed:
+        messages.append(f"Cleaned up stale entries: {', '.join(removed)}")
+
+    return messages
 
 
 def sync_from_swanctl(paths=None):
-    """Sync from swanctl.conf / conf.d/*.conf (modern vici format)."""
+    """Sync from swanctl.conf / conf.d/*.conf."""
     conns, psks = parse_swanctl_conf(paths)
     if not conns:
         return ["No connections found in swanctl config files"]
-    return _apply_groups(conns, psks)
+    messages = _apply_groups(conns, psks)
+
+    conf_names = {c['_name'] for c in conns}
+    removed = sync_cleanup(conf_names)
+    if removed:
+        messages.append(f"Cleaned up stale entries: {', '.join(removed)}")
+
+    return messages
 
 
 def sync_from_vici():
     """
-    VICI-first sync: imports whatever charon has loaded regardless of config
-    format. PSKs are left blank (user fills them in via PSK Secrets page).
-    Works for any strongSwan installation with the vici plugin.
+    VICI-first sync: imports whatever charon has loaded.
+    PSKs are left blank (user fills them via PSK Secrets page).
     """
     from strongMan.helper_apps.vici.wrapper.wrapper import ViciWrapper
     socket = find_vici_socket()
@@ -491,8 +598,8 @@ def sync_from_vici():
     except Exception as e:
         return [f"VICI socket error ({socket}): {e}"]
 
-    messages = []
-    seen_names = set()   # deduplicate: list_conns may return a name from both stroke and VICI
+    messages  = []
+    seen_names = set()
 
     def _dv(v, default=''):
         return v.decode() if isinstance(v, bytes) else (str(v) if v else default)
@@ -509,12 +616,12 @@ def sync_from_vici():
                 for k, sub in ike.items():
                     k_str = k if isinstance(k, str) else k.decode()
                     if k_str.startswith('local-') and isinstance(sub, dict):
-                        cls = sub.get('class', sub.get(b'class', b''))
+                        cls        = sub.get('class', sub.get(b'class', b''))
                         local_auth = cls.decode() if isinstance(cls, bytes) else str(cls)
                         break
 
-                la  = ike.get('local_addrs',  ike.get(b'local_addrs',  []))
-                ra  = ike.get('remote_addrs', ike.get(b'remote_addrs', []))
+                la    = ike.get('local_addrs',  ike.get(b'local_addrs',  []))
+                ra    = ike.get('remote_addrs', ike.get(b'remote_addrs', []))
                 left  = _dv(la[0]) if la else ''
                 right = _dv(ra[0]) if ra else ''
                 ver   = _dv(ike.get('version', ike.get(b'version', b'2')))
@@ -528,17 +635,18 @@ def sync_from_vici():
                 child_confs = []
                 for cname, cdetails in children.items():
                     cname_str = cname if isinstance(cname, str) else cname.decode()
-                    lts_raw = cdetails.get('local-ts',  cdetails.get(b'local-ts',  []))
-                    rts_raw = cdetails.get('remote-ts', cdetails.get(b'remote-ts', []))
+                    lts_raw   = cdetails.get('local-ts',  cdetails.get(b'local-ts',  []))
+                    rts_raw   = cdetails.get('remote-ts', cdetails.get(b'remote-ts', []))
                     conf = {
-                        '_name':       cname_str,
-                        'left':        left,
-                        'right':       right,
-                        'keyexchange': f'ikev{ver}',
-                        'authby':      'secret' if 'pre-shared' in local_auth else local_auth,
-                        'leftsubnet':  ','.join(_dv(t) for t in lts_raw),
-                        'rightsubnet': ','.join(_dv(t) for t in rts_raw),
-                        'auto':        'start',
+                        '_name':        cname_str,
+                        '_is_template': False,
+                        'left':         left,
+                        'right':        right,
+                        'keyexchange':  f'ikev{ver}',
+                        'authby':       'secret' if 'pre-shared' in local_auth else local_auth,
+                        'leftsubnet':   ','.join(_dv(t) for t in lts_raw),
+                        'rightsubnet':  ','.join(_dv(t) for t in rts_raw),
+                        'auto':         'start',
                     }
                     if primary is None:
                         primary = conf
@@ -549,12 +657,9 @@ def sync_from_vici():
                 if primary is None:
                     continue
 
-                # Preserve existing PSK — only blank-fill for new entries
                 existing = Connection.objects.filter(profile=ike_name).first()
                 if existing:
-                    # update structure but don't wipe PSK
                     psk_val = ''
-                    from strongMan.apps.server_connections.models.authentication import PskAuthentication
                     for auth in Authentication.objects.filter(local=existing):
                         sub = auth.subclass()
                         if isinstance(sub, PskAuthentication) and sub.psk:
@@ -564,8 +669,8 @@ def sync_from_vici():
                 else:
                     psks_for_upsert = {}
 
-                _, _, msg = upsert_connection_group(primary, child_confs, psks_for_upsert)
-                psk_note = '' if existing else ' (PSK blank — set via PSK Secrets page)'
+                _, _, msg  = upsert_connection_group(primary, child_confs, psks_for_upsert)
+                psk_note   = '' if existing else ' (PSK blank — set via PSK Secrets page)'
                 messages.append(msg + psk_note)
     except Exception as e:
         messages.append(f"VICI error: {e}")
@@ -575,11 +680,6 @@ def sync_from_vici():
 # ─── auto-detect and sync ─────────────────────────────────────────────────────
 
 def detect_config_format():
-    """
-    Detect which strongSwan config format is in use.
-    Returns one of: 'ipsec', 'swanctl', 'vici-only', 'unknown'
-    """
-    # Check ipsec.conf with real connections
     for p in ['/etc/ipsec.conf', '/etc/strongswan/ipsec.conf']:
         if os.path.isfile(p):
             try:
@@ -589,28 +689,22 @@ def detect_config_format():
             except Exception:
                 pass
 
-    # Check swanctl with real connections
     if _has_real_swanctl_conns():
         return 'swanctl'
 
-    # Fall back to VICI live query
     return 'vici-only'
 
 
 def auto_sync():
-    """
-    Detect config format and run the appropriate sync.
-    Returns (format_used, messages_list).
-    """
+    """Detect config format and run the appropriate sync. Returns (format_used, messages)."""
     fmt = detect_config_format()
 
     if fmt == 'ipsec':
-        # Try to find the actual ipsec.conf path
         conf_path    = '/etc/ipsec.conf'
         secrets_path = '/etc/ipsec.secrets'
         for p in ['/etc/strongswan/ipsec.conf']:
             if os.path.isfile(p):
-                conf_path = p
+                conf_path    = p
                 secrets_path = os.path.join(os.path.dirname(p), 'ipsec.secrets')
                 break
         msgs = sync_from_conf(conf_path, secrets_path)
@@ -624,7 +718,27 @@ def auto_sync():
     return fmt, msgs
 
 
-# ─── VICI discovery (connections in charon but not in GUI DB) ─────────────────
+# ─── helper: names currently in the active conf file ─────────────────────────
+
+def get_conf_connection_names():
+    """
+    Return set of connection profile names from the active config file.
+    Returns None if the format cannot be determined or parsed.
+    """
+    try:
+        fmt = detect_config_format()
+        if fmt == 'ipsec':
+            conns = parse_ipsec_conf()
+            return {c['_name'] for c in conns}
+        elif fmt == 'swanctl':
+            conns, _ = parse_swanctl_conf()
+            return {c['_name'] for c in conns}
+    except Exception:
+        pass
+    return None
+
+
+# ─── VICI discovery ───────────────────────────────────────────────────────────
 
 def _decode(val):
     if isinstance(val, (bytes, bytearray)):
@@ -633,10 +747,10 @@ def _decode(val):
 
 
 def get_vici_conn_details(name, raw):
-    version    = _decode(raw.get('version', '?'))
+    version      = _decode(raw.get('version', '?'))
     local_addrs  = [_decode(a) for a in raw.get('local_addrs',  [])]
     remote_addrs = [_decode(a) for a in raw.get('remote_addrs', [])]
-    auth_class = 'unknown'
+    auth_class   = 'unknown'
     for k, sub in raw.items():
         if (k if isinstance(k, str) else k.decode()).startswith('local-') and isinstance(sub, dict):
             auth_class = _decode(sub.get('class', ''))
@@ -661,7 +775,7 @@ def get_discovered_connections():
     """Return connections charon knows about that are not yet in the DB."""
     from strongMan.helper_apps.vici.wrapper.wrapper import ViciWrapper
     try:
-        v = ViciWrapper(socket_path=find_vici_socket())
+        v          = ViciWrapper(socket_path=find_vici_socket())
         db_profiles = set(Connection.objects.values_list('profile', flat=True))
         discovered  = []
         for conn in v.session.list_conns():
@@ -678,11 +792,11 @@ def import_from_vici(conn_name):
     """Import a single VICI-discovered connection into the DB (PSK left blank)."""
     from strongMan.helper_apps.vici.wrapper.wrapper import ViciWrapper
     try:
-        v = ViciWrapper(socket_path=find_vici_socket())
+        v        = ViciWrapper(socket_path=find_vici_socket())
         raw_list = {}
         for conn in v.session.list_conns():
             for name, details in conn.items():
-                name_str = name if isinstance(name, str) else name.decode()
+                name_str          = name if isinstance(name, str) else name.decode()
                 raw_list[name_str] = details
 
         if conn_name not in raw_list:
@@ -690,12 +804,12 @@ def import_from_vici(conn_name):
         if Connection.objects.filter(profile=conn_name).exists():
             return None, f"'{conn_name}' already exists in DB"
 
-        info = get_vici_conn_details(conn_name, raw_list[conn_name])
-        la   = [a.strip() for a in info['local_addrs'].split(',')  if a.strip()]
-        ra   = [a.strip() for a in info['remote_addrs'].split(',') if a.strip()]
-        ver  = '1' if 'IKEv1' in info['version'] else '2'
+        info  = get_vici_conn_details(conn_name, raw_list[conn_name])
+        la    = [a.strip() for a in info['local_addrs'].split(',')  if a.strip()]
+        ra    = [a.strip() for a in info['remote_addrs'].split(',') if a.strip()]
+        ver   = '1' if 'IKEv1' in info['version'] else '2'
 
-        conn = IKEv2PSK.objects.create(
+        conn  = IKEv2PSK.objects.create(
             profile=conn_name, version=ver, connection_type='site_to_site',
             initiate=True, enabled=False, send_certreq=False,
         )
@@ -706,7 +820,8 @@ def import_from_vici(conn_name):
         PskAuthentication.objects.create(name='local-1',  auth='psk', round=1, local=conn,  psk='', identity=left)
         PskAuthentication.objects.create(name='remote-1', auth='psk', round=1, remote=conn, psk='', identity=right)
         for cname, cdetails in info['children'].items():
-            child = Child.objects.create(name=cname, mode='tunnel', start_action='start', connection=conn)
+            child = Child(name=cname, mode='tunnel', start_action='start', connection=conn)
+            child.save()
             for ts in cdetails['local_ts']:
                 Address.objects.create(value=ts, local_ts=child)
             for ts in cdetails['remote_ts']:
